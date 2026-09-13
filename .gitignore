@@ -1,6 +1,7 @@
 .env
 donors.json
 rate_limit*.json
+analytics.jsonl
 error.log
 avatar.png
 __pycache__/

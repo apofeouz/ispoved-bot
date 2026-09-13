@@ -52,6 +52,53 @@ YOOKASSA_TOKEN = os.getenv("YOOKASSA_PROVIDER_TOKEN", "").strip()
 DONATE_PRICE = int(os.getenv("DONATE_PRICE", "9900"))
 
 DONOR_DAYS = 30
+ANALYTICS_FILE = pathlib.Path("analytics.jsonl")
+
+def log_event(user_id: int, event: str, extra: str = ""):
+    try:
+        rec = {"ts": int(time.time()), "uid": int(user_id), "event": event}
+        if extra:
+            rec["extra"] = extra[:80]
+        # utm из start_param
+        with open(ANALYTICS_FILE, "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except:
+        pass
+
+def get_stats():
+    if not ANALYTICS_FILE.exists():
+        return "Пока нет данных."
+    try:
+        counts = {}
+        pay = 0
+        uniq = set()
+        for line in ANALYTICS_FILE.read_text().splitlines():
+            try:
+                r = json.loads(line)
+                e = r.get("event")
+                counts[e] = counts.get(e, 0) + 1
+                if e == "pay_success":
+                    pay += 1
+                uniq.add(r.get("uid"))
+            except:
+                continue
+        start = counts.get("start", 0)
+        msg = counts.get("message", 0)
+        limit = counts.get("limit_hit", 0)
+        click = counts.get("donate_click", 0)
+        conv = (pay / start * 100) if start else 0
+        return (
+            f"Старт: {start}\n"
+            f"Написали: {msg} ({(msg/start*100 if start else 0):.0f}%)\n"
+            f"Уперлись в лимит: {limit} ({(limit/msg*100 if msg else 0):.0f}% от писавших)\n"
+            f"Кликнули донат: {click} ({(click/limit*100 if limit else 0):.0f}% от упершихся)\n"
+            f"Оплатили: {pay} ({(pay/click*100 if click else 0):.0f}% от кликов)\n"
+            f"Конверсия старт->оплата: {conv:.1f}%\n"
+            f"Уникальных: {len(uniq)}\n"
+            f"Выручка: {pay * DONATE_PRICE/100:.0f}₽"
+        )
+    except Exception as e:
+        return f"Ошибка: {e}"
 
 def is_donor(user_id: int) -> bool:
     if not DONORS_FILE.exists():
@@ -162,6 +209,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    # utm: /start tiktok
+    extra = " ".join(context.args) if context.args else ""
+    log_event(update.effective_user.id, "start", extra)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🕯 Снять лимит 99₽", callback_data="donate")]]) if YOOKASSA_TOKEN else None
     await update.message.reply_text(
         "Мир тебе. Я — собеседник-наставник, не священник.\n"
@@ -182,6 +232,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def donate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log_event(update.effective_user.id, "donate_click")
     if not YOOKASSA_TOKEN:
         await update.message.reply_text("Донаты пока не настроены.")
         return
@@ -208,6 +259,7 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def success_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     add_donor(uid)
+    log_event(uid, "pay_success", f"{DONATE_PRICE}")
     await update.message.reply_text("Спасибо! Лимит снят — теперь безлимит на 30 дней. Пиши когда тяжело на душе.")
 
 # для админа ручная выдача: /grant 123456 и просмотр базы /donors
@@ -225,14 +277,20 @@ async def grant_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def donors_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"База доноров ({DONOR_DAYS}д):\n" + donor_info() + f"\n\nФайл: donors.json")
 
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📊 Конверсия:\n" + get_stats() + f"\n\nФайл: analytics.jsonl")
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     uid = update.effective_user.id
     text = (update.message.text or "").strip()
     if not text:
         return
+    log_event(uid, "message")
     ok, msg = check_limit(uid)
     if not ok:
+        if "исчерпан" in msg:
+            log_event(uid, "limit_hit")
         kb = None
         if "исчерпан" in msg and YOOKASSA_TOKEN:
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("🕯 Снять лимит 99₽", callback_data="donate")]])
@@ -255,6 +313,7 @@ def main():
     app.add_handler(CommandHandler("donate", donate_cmd))
     app.add_handler(CommandHandler("grant", grant_cmd))
     app.add_handler(CommandHandler("donors", donors_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
     from telegram.ext import CallbackQueryHandler, PreCheckoutQueryHandler
     app.add_handler(CallbackQueryHandler(donate_callback, pattern="^donate$"))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
