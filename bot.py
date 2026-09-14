@@ -73,33 +73,44 @@ def get_stats():
     if not ANALYTICS_FILE.exists():
         return "Пока нет данных."
     try:
-        counts = {}
-        pay = 0
-        uniq = set()
+        uniq_start = set()
+        uniq_msg = set()
+        uniq_limit = set()
+        uniq_click = set()
+        uniq_pay = set()
+        uniq_all = set()
+        total_msg = 0
         for line in ANALYTICS_FILE.read_text().splitlines():
             try:
                 r = json.loads(line)
+                uid = r.get("uid")
                 e = r.get("event")
-                counts[e] = counts.get(e, 0) + 1
-                if e == "pay_success":
-                    pay += 1
-                uniq.add(r.get("uid"))
+                if uid is not None:
+                    uniq_all.add(uid)
+                if e == "start":
+                    uniq_start.add(uid)
+                elif e == "message":
+                    uniq_msg.add(uid)
+                    total_msg += 1
+                elif e == "limit_hit":
+                    uniq_limit.add(uid)
+                elif e == "donate_click":
+                    uniq_click.add(uid)
+                elif e == "pay_success":
+                    uniq_pay.add(uid)
             except:
                 continue
-        start = counts.get("start", 0)
-        msg = counts.get("message", 0)
-        limit = counts.get("limit_hit", 0)
-        click = counts.get("donate_click", 0)
-        conv = (pay / start * 100) if start else 0
+        s, m, l, c, p = len(uniq_start), len(uniq_msg), len(uniq_limit), len(uniq_click), len(uniq_pay)
+        conv = (p / s * 100) if s else 0
         return (
-            f"Старт: {start}\n"
-            f"Написали: {msg} ({(msg/start*100 if start else 0):.0f}%)\n"
-            f"Уперлись в лимит: {limit} ({(limit/msg*100 if msg else 0):.0f}% от писавших)\n"
-            f"Кликнули донат: {click} ({(click/limit*100 if limit else 0):.0f}% от упершихся)\n"
-            f"Оплатили: {pay} ({(pay/click*100 if click else 0):.0f}% от кликов)\n"
+            f"Старт (людей): {s}\n"
+            f"Писали (людей): {m} ({(m/s*100 if s else 0):.0f}%) всего сообщений: {total_msg}\n"
+            f"Уперлись в лимит: {l} ({(l/m*100 if m else 0):.0f}% от писавших)\n"
+            f"Кликнули донат: {c} ({(c/l*100 if l else 0):.0f}% от упершихся)\n"
+            f"Оплатили: {p} ({(p/c*100 if c else 0):.0f}% от кликов)\n"
             f"Конверсия старт->оплата: {conv:.1f}%\n"
-            f"Уникальных: {len(uniq)}\n"
-            f"Выручка: {pay * DONATE_PRICE/100:.0f}₽"
+            f"Уникальных всего: {len(uniq_all)}\n"
+            f"Выручка: {p * DONATE_PRICE/100:.0f}₽"
         )
     except Exception as e:
         return f"Ошибка: {e}"
