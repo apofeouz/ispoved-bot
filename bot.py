@@ -34,16 +34,20 @@ if not API_KEY:
     print("ОШИБКА: нет DEEPSEEK_API_KEY / OPENROUTER_API_KEY")
     exit(1)
 
-SYSTEM_PROMPT = """Ты - кроткий православный наставник.
-Отвечай КРАТКО: 4-6 предложений, без воды.
+SYSTEM_PROMPT = """Ты - кроткий православный наставник, живой собеседник, не робот.
+Отвечай КРАТКО: 3-5 предложений.
 
-Структура:
-1. Короткое утешение без осуждения (1-2 предложения).
-2. Если уместно - ОДНА точная цитата из Библии с источником (Мф. 11:28, 1 Ин. 1:9, Пс. 50:12). Если нет - пропусти.
-3. Краткий совет: молитва (ТОЛЬКО "Отче наш" или "Господи Иисусе Христе, Сыне Божий, помилуй мя грешного"), разговор с близким, совет сходить в храм.
-4. Напомни про таинство ТОЛЬКО если просят отпустить грехи: "Разрешение грехов дает только священник в храме". Не повторяй каждый раз.
-5. Один короткий вопрос для размышления.
-Не выдумывай молитвы, не ставь епитимью. Если суицид - дай 8-800-2000-122.
+Правила живости:
+- Если человек прощается ("спокойной ночи", "пока", "спасибо, пошел спать") - просто пожелай доброй ночи/мира без вопросов и без поучений. Не задавай крючков.
+- Вопрос задавай только если уместно и не каждый раз (через раз). Не допрашивай.
+- Помни контекст: если только что читал молитву и просят объяснить - объясняй ту же молитву, не спрашивай "какую?".
+- Говори тепло, по-человечески, без шаблона.
+
+Структура когда уместно:
+1. Короткое утешение без осуждения.
+2. Если уместно - ОДНА точная цитата из Библии с источником (Мф. 11:28, 1 Ин. 1:9, Пс. 50). Если нет - пропусти, не выдумывай.
+3. Краткий совет: молитва ТОЛЬКО "Отче наш" или "Господи Иисусе Христе, Сыне Божий, помилуй мя грешного", или совет поговорить с близким/сходить в храм.
+Напомни про таинство ТОЛЬКО если просят отпустить грехи. Не выдумывай молитвы. Если суицид - дай 8-800-2000-122.
 """
 
 RATE_FILE = pathlib.Path("rate_limit_tg.json")
@@ -144,6 +148,31 @@ def donor_info():
     except Exception as e:
         return f"Ошибка базы: {e}"
 
+HISTORY_FILE = pathlib.Path("history.json")
+HISTORY_LIMIT = 8  # последних сообщений (4 обмена)
+
+def load_history(user_id: int):
+    if not HISTORY_FILE.exists():
+        return []
+    try:
+        d = json.loads(HISTORY_FILE.read_text())
+        return d.get(str(user_id), [])[-HISTORY_LIMIT:]
+    except:
+        return []
+
+def save_history(user_id: int, role: str, content: str):
+    try:
+        d = {}
+        if HISTORY_FILE.exists():
+            d = json.loads(HISTORY_FILE.read_text())
+        lst = d.get(str(user_id), [])
+        lst.append({"role": role, "content": content})
+        # храним последние 20
+        d[str(user_id)] = lst[-20:]
+        HISTORY_FILE.write_text(json.dumps(d, ensure_ascii=False))
+    except:
+        pass
+
 def check_limit(user_id: int):
     if is_donor(user_id):
         return True, ""
@@ -172,13 +201,12 @@ def check_limit(user_id: int):
         pass
     return True, ""
 
-def ask_deepseek(user_text: str) -> str:
+def ask_deepseek(user_text: str, user_id: int = 0) -> str:
+    hist = load_history(user_id) if user_id else []
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + hist + [{"role": "user", "content": user_text}]
     payload = {
         "model": MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text},
-        ],
+        "messages": msgs,
         "max_tokens": 700 if PROVIDER == "deepseek" else 2000,
         "stream": False,
     }
@@ -300,7 +328,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # синхронный запрос в треде чтобы не блокировать
     import asyncio
     loop = asyncio.get_event_loop()
-    reply = await loop.run_in_executor(None, ask_deepseek, text)
+    reply = await loop.run_in_executor(None, ask_deepseek, text, uid)
+    save_history(uid, "user", text)
+    save_history(uid, "assistant", reply)
     # разбить если >4000 символов
     for i in range(0, len(reply), 4000):
         await update.message.reply_text(reply[i:i+4000])

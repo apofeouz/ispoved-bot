@@ -2,6 +2,7 @@
 donors.json
 rate_limit*.json
 analytics.jsonl
+history.json
 error.log
 avatar.png
 __pycache__/
